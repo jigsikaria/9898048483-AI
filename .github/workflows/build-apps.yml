@@ -54,7 +54,7 @@ jobs:
 
   build-windows:
     name: Build Windows EXE
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.platform == 'all' || inputs.platform == 'windows' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
 
   build-macos:
     name: Build macOS DMG
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -109,7 +109,7 @@ jobs:
 
   build-linux:
     name: Build Linux AppImage
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -142,7 +142,7 @@ jobs:
 
   build-android:
     name: Build Android APK
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'android' }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.platform == 'all' || inputs.platform == 'android' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
