@@ -106,6 +106,27 @@ describe('FallbackRouter', () => {
     const body = await result.response.json().catch(() => ({}));
     expect(body.error.type).toBe('fallback_chain_exhausted');
   });
+
+  it('returns a friendly missing_api_key error when no provider has a key', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    const rotator = new MultiKeyRotator();
+    const router = new FallbackRouter(rotator);
+
+    const mock = vi.fn(async () => okJson({}));
+    vi.stubGlobal('fetch', mock);
+
+    const result = await router.tryChain(
+      ['anthropic', 'gemini'],
+      requestFor('claude-3-5-sonnet-20241022'),
+      new Headers(),
+    );
+    expect(result.response.status).toBe(502);
+    const body = await result.response.json().catch(() => ({}));
+    expect(body.error.type).toBe('missing_api_key');
+    expect(body.error.message).toContain('API Key missing for provider');
+    expect(mock).not.toHaveBeenCalled();
+  });
 });
 
 describe('Protocol request building', () => {

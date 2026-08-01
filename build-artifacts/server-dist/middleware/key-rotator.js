@@ -59,6 +59,10 @@ export class MultiKeyRotator {
         this.cursor.set(provider, 0);
         return oldest.value;
     }
+    /** True when at least one key is configured for the provider (env or injected). */
+    hasKeys(provider) {
+        return this.providerKeys(provider).length > 0;
+    }
     /**
      * Record a request result against a key.
      * @param status HTTP status observed from the upstream provider.

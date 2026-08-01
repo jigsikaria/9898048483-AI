@@ -72,6 +72,7 @@ export default function ChatStudio({ model, provider, onModelChange, onProviderC
   const [busy, setBusy] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [temperature, setTemperature] = useState(0.7);
+  const [alert, setAlert] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const activeKey = getVaultKey(resolveProvider(model, provider));
@@ -85,6 +86,7 @@ export default function ChatStudio({ model, provider, onModelChange, onProviderC
     if (!text || busy) return;
     setInput('');
     setBusy(true);
+    setAlert(null);
 
     const history: DisplayMessage[] = messages.filter((m) => m.role !== 'system');
     const historyPayload: ChatMessage[] = history.map((m) => ({ role: m.role, content: m.content }));
@@ -170,6 +172,7 @@ export default function ChatStudio({ model, provider, onModelChange, onProviderC
       } else {
         const message = err instanceof Error ? err.message : String(err);
         accumulate(`\n\n_Error: ${message}_`);
+        setAlert({ kind: 'error', text: message });
       }
     } finally {
       setMessages((prev) => prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)));
@@ -248,6 +251,24 @@ export default function ChatStudio({ model, provider, onModelChange, onProviderC
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto panel p-4 space-y-4">
+        {alert && (
+          <div
+            className={`flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-xs msg-in ${
+              alert.kind === 'error'
+                ? 'border-red-400/50 bg-red-500/10 text-red-300'
+                : 'border-cyber-neon/50 bg-cyber-neon/10 text-cyber-neon'
+            }`}
+            role="alert"
+          >
+            <span className="leading-relaxed">{alert.text}</span>
+            <button
+              onClick={() => setAlert(null)}
+              className="shrink-0 opacity-60 hover:opacity-100 text-[10px] uppercase tracking-wider"
+            >
+              dismiss
+            </button>
+          </div>
+        )}
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div

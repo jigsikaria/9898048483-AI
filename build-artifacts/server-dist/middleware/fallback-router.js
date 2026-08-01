@@ -126,6 +126,7 @@ export class FallbackRouter {
      */
     async tryChain(chain, request, headers, predicate = FallbackRouter.defaultPredicate) {
         let lastError = null;
+        let missingKey = false;
         let attempt = 1;
         for (const provider of chain) {
             if (this.isQuarantined(provider)) {
@@ -135,6 +136,7 @@ export class FallbackRouter {
             const requiresKey = provider !== 'ollama' && provider !== 'vllm';
             const key = this.rotator.next(provider);
             if (requiresKey && !key) {
+                missingKey = true;
                 attempt += 1;
                 continue;
             }
@@ -161,13 +163,23 @@ export class FallbackRouter {
             }
             attempt += 1;
         }
-        const fallback = new Response(JSON.stringify({
-            error: {
-                message: lastError?.body || 'All providers failed',
-                type: 'fallback_chain_exhausted',
-                attempt,
-            },
-        }), { status: lastError?.status ?? 502, headers: { 'content-type': 'application/json' } });
+        const missingKeyError = missingKey && lastError === null
+            ? JSON.stringify({
+                error: {
+                    message: 'API Key missing for provider. Please add your key in the Key Vault tab or .env file.',
+                    type: 'missing_api_key',
+                    attempt,
+                },
+            })
+            : null;
+        const fallback = new Response(missingKeyError ??
+            JSON.stringify({
+                error: {
+                    message: lastError?.body || 'All providers failed',
+                    type: 'fallback_chain_exhausted',
+                    attempt,
+                },
+            }), { status: lastError?.status ?? 502, headers: { 'content-type': 'application/json' } });
         return { provider: chain[0] ?? 'openai', response: fallback, attempt };
     }
     status() {

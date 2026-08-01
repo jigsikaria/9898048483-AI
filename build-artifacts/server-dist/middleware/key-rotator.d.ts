@@ -13,6 +13,8 @@ export declare class MultiKeyRotator {
     private providerKeys;
     /** Returns the next healthy key, cycling round-robin. Null when no key is available. */
     next(provider: ProviderName): string | null;
+    /** True when at least one key is configured for the provider (env or injected). */
+    hasKeys(provider: ProviderName): boolean;
     /**
      * Record a request result against a key.
      * @param status HTTP status observed from the upstream provider.

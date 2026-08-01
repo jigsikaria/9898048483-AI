@@ -253,6 +253,26 @@ app.post('/v1/chat/completions', async (c) => {
     }
   }
 
+  // Friendly 502 when the user selected a cloud provider but no API key is
+  // configured anywhere in the chain (env, vault or per-request injection).
+  // Only an explicitly-requested local provider (ollama/vllm) bypasses this.
+  const canServe =
+    primary === 'ollama' ||
+    primary === 'vllm' ||
+    chain.some((p) => p !== 'ollama' && p !== 'vllm' && rotator.hasKeys(p));
+  if (!canServe) {
+    return c.json(
+      {
+        error: {
+          message: 'API Key missing for provider. Please add your key in the Key Vault tab or .env file.',
+          type: 'missing_api_key',
+          providers: chain,
+        },
+      },
+      502,
+    );
+  }
+
   try {
     const { provider, response, attempt } = await router.tryChain(chain, chatBody, c.req.raw.headers);
     if (attempt > 1) fallbackEvents += 1;
