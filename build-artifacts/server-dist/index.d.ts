@@ -1,0 +1,10 @@
+import { Hono } from 'hono';
+import { MultiKeyRotator } from './middleware/key-rotator.ts';
+import { FallbackRouter } from './middleware/fallback-router.ts';
+import type { RequestLogEntry } from './types.ts';
+declare const app: Hono<import("hono/types").BlankEnv, import("hono/types").BlankSchema, "/">;
+declare const rotator: MultiKeyRotator;
+declare const router: FallbackRouter;
+declare const requestLog: RequestLogEntry[];
+export default app;
+export { rotator, router, requestLog };

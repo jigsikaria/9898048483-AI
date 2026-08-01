@@ -7,6 +7,9 @@ build/
 coverage/
 *.tsbuildinfo
 
+# Committed build artifacts (generated dist output, kept in repo)
+!build-artifacts/
+
 # Env
 .env
 .env.local
