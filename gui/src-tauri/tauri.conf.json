@@ -62,11 +62,10 @@
       }
     },
     "android": {
-      "minSdkVersion": 24,
-      "targetSdkVersion": 34
+      "minSdkVersion": 24
     },
-    "ios": {
-      "minVersion": "13.0"
+    "iOS": {
+      "minimumSystemVersion": "13.0"
     }
   },
   "plugins": {

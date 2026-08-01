@@ -89,65 +89,82 @@ jobs:
             artifact: adapter-os-android
             path: gui/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
             system-deps: ''
-    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.platform == 'all' || inputs.platform == matrix.platform }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Platform selection gate
+        id: gate
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.platform }}" = "all" ] || [ "${{ inputs.platform }}" = "${{ matrix.platform }}" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.gate.outputs.skip != 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: gui/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.skip != 'true'
         with:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Add Rust cross-compile targets
-        if: matrix.rust-targets != ''
+        if: steps.gate.outputs.skip != 'true' && matrix.rust-targets != ''
         run: rustup target add ${{ matrix.rust-targets }}
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.skip != 'true'
         with:
           workspaces: gui/src-tauri
 
       - name: Install Linux system deps
-        if: matrix.system-deps != ''
+        if: steps.gate.outputs.skip != 'true' && matrix.system-deps != ''
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.system-deps }}
 
       - name: Setup Java 17
-        if: matrix.platform == 'android'
+        if: steps.gate.outputs.skip != 'true' && matrix.platform == 'android'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Install Android SDK
-        if: matrix.platform == 'android'
+        if: steps.gate.outputs.skip != 'true' && matrix.platform == 'android'
         uses: android-actions/setup-android@v3
 
       - name: Install frontend deps
+        if: steps.gate.outputs.skip != 'true'
         working-directory: gui
         run: npm install
 
       - name: Init Android project
-        if: matrix.platform == 'android'
+        if: steps.gate.outputs.skip != 'true' && matrix.platform == 'android'
         working-directory: gui
         run: npm run tauri android init
 
       - name: Build Android APK
-        if: matrix.platform == 'android'
+        if: steps.gate.outputs.skip != 'true' && matrix.platform == 'android'
         working-directory: gui
         run: npm run tauri android build
 
       - name: Build desktop bundle
-        if: matrix.platform != 'android'
+        if: steps.gate.outputs.skip != 'true' && matrix.platform != 'android'
         working-directory: gui
         run: npm run tauri build
 
       - name: Upload artifact
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
