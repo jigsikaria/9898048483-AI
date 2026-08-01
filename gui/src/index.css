@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-cyber-bg text-slate-200 font-mono antialiased;
+  background-image:
+    radial-gradient(ellipse at 20% -10%, rgba(0, 255, 156, 0.08), transparent 55%),
+    radial-gradient(ellipse at 90% 10%, rgba(34, 211, 238, 0.06), transparent 50%),
+    linear-gradient(rgba(0, 255, 156, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 156, 0.03) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 32px 32px, 32px 32px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0d1a;
+}
+::-webkit-scrollbar-thumb {
+  background: #1c2333;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00ff9c55;
+}
+
+.panel {
+  @apply bg-cyber-panel/90 border border-cyber-border rounded-xl backdrop-blur;
+}
+
+.neon-text {
+  text-shadow: 0 0 8px rgba(0, 255, 156, 0.8);
+}
+
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(0, 255, 156, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 156, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.msg-in {
+  animation: fadeInUp 0.25s ease-out both;
+}
+
+.code-scroll pre {
+  @apply overflow-x-auto p-4 rounded-lg bg-black/60 text-sm;
+}

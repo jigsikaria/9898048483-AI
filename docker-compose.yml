@@ -1,0 +1,39 @@
+name: adapter-os
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: adapter-os:10.0.0
+    container_name: adapter-os-gateway
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    env_file:
+      - .env
+    environment:
+      - PORT=8787
+      - HOST=0.0.0.0
+    volumes:
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional: local Ollama alongside the gateway for the zero-latency route.
+  # Uncomment to enable the `ollama` provider inside Docker networking.
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: adapter-os-ollama
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+
+volumes:
+  ollama-data:
