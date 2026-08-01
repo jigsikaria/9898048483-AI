@@ -14,6 +14,7 @@ fn proxy_chat(model: String, messages: String) -> Result<String, String> {
     Err("configure the server endpoint in the GUI settings".to_string())
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
