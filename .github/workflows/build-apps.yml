@@ -20,7 +20,7 @@ on:
 
 env:
   NODE_VERSION: 22
-  RUST_VERSION: 1.77.2
+  RUST_VERSION: 1.97.1
 
 jobs:
   typecheck:
@@ -90,6 +90,10 @@ jobs:
             path: gui/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
             system-deps: ''
     if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
+    env:
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '10'
+      CARGO_NET_TIMEOUT: '600'
     steps:
       - uses: actions/checkout@v4
 
@@ -161,7 +165,18 @@ jobs:
       - name: Build desktop bundle
         if: steps.gate.outputs.skip != 'true' && matrix.platform != 'android'
         working-directory: gui
-        run: npm run tauri build
+        shell: bash
+        run: |
+          for attempt in 1 2; do
+            echo "::group::tauri build attempt $attempt"
+            if npm run tauri build; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "Build attempt $attempt failed (transient cargo download corruption), retrying..."
+          done
+          exit 1
 
       - name: Upload artifact
         if: steps.gate.outputs.skip != 'true'
