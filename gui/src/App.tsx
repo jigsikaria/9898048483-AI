@@ -1,18 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
-import { MessageSquare, Gauge, Plug, KeyRound, Boxes } from 'lucide-react';
+import { MessageSquare, Gauge, Plug, KeyRound, Boxes, BadgeDollarSign } from 'lucide-react';
 import ChatStudio from './components/ChatStudio';
 import GatewayDashboard from './components/GatewayDashboard';
 import IDEConfigurator from './components/IDEConfigurator';
 import KeyVault from './components/KeyVault';
+import ProHub from './components/ProHub';
 import { fetchHealth, getBaseUrl, setGatewayUrl } from './lib/api';
 
-type Tab = 'chat' | 'gateway' | 'ide' | 'vault';
+type Tab = 'chat' | 'gateway' | 'ide' | 'vault' | 'pro';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof MessageSquare }> = [
   { id: 'chat', label: 'Chat Studio', icon: MessageSquare },
   { id: 'gateway', label: 'Gateway Control', icon: Gauge },
   { id: 'ide', label: 'IDE Guide', icon: Plug },
   { id: 'vault', label: 'Key Vault', icon: KeyRound },
+  { id: 'pro', label: 'Pro Hub', icon: BadgeDollarSign },
 ];
 
 export default function App() {
@@ -130,6 +132,7 @@ export default function App() {
         {tab === 'gateway' && <GatewayDashboard onSelectModel={selectModel} />}
         {tab === 'ide' && <IDEConfigurator />}
         {tab === 'vault' && <KeyVault />}
+        {tab === 'pro' && <ProHub />}
       </main>
     </div>
   );

@@ -161,6 +161,7 @@ The bundled app targets: **Windows NSIS .exe**, **macOS .dmg**, **Linux .AppImag
 | Gateway Control      | Live latency, request log, provider health toggles, model catalog   |
 | IDE Guide            | 1-click copy configs for VS Code, Cursor, JetBrains, Android Studio, Obsidian, Chatbox, Zed |
 | Key Vault            | Locally encrypted keys (AES-256-GCM, PBKDF2). Unlocked keys are automatically sent as `Authorization: Bearer <key>` to the gateway for the matching provider (per-request key injection), which takes precedence over server env keys |
+| Pro Hub              | Official support resources: WhatsApp consultation, donation system, and digital store catalog |
 
 Security note: vault keys are decrypted only in-memory after your passphrase unlock, and are sent
 to whichever gateway URL you configure in the **ENDPOINT** setting — use that only with gateways

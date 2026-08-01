@@ -1,0 +1,196 @@
+name: Build Apps
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build (windows, macos, linux, android, all)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
+          - linux
+          - android
+
+env:
+  NODE_VERSION: 22
+  RUST_VERSION: 1.77.2
+
+jobs:
+  typecheck:
+    name: Typecheck Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  build-gui-web:
+    name: Build GUI (Web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - working-directory: gui
+        run: npm install
+      - working-directory: gui
+        run: npm run build
+
+  build-windows:
+    name: Build Windows EXE
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui/src-tauri
+      - working-directory: gui
+        run: npm install
+      - working-directory: gui
+        run: npm run tauri build
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-os-windows
+          path: gui/src-tauri/target/release/bundle/nsis/*.exe
+
+  build-macos:
+    name: Build macOS DMG
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui/src-tauri
+      - working-directory: gui
+        run: npm install
+      - working-directory: gui
+        run: npm run tauri build
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-os-macos
+          path: gui/src-tauri/target/release/bundle/dmg/*.dmg
+
+  build-linux:
+    name: Build Linux AppImage
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui/src-tauri
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - working-directory: gui
+        run: npm install
+      - working-directory: gui
+        run: npm run tauri build
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-os-linux
+          path: |
+            gui/src-tauri/target/release/bundle/appimage/*.AppImage
+            gui/src-tauri/target/release/bundle/deb/*.deb
+
+  build-android:
+    name: Build Android APK
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'android' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: gui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui/src-tauri
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+      - working-directory: gui
+        run: npm install
+      - name: Init Android project
+        working-directory: gui
+        run: npm run tauri android init
+      - name: Build APK
+        working-directory: gui
+        run: npm run tauri android build
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-os-android
+          path: gui/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+
+  release:
+    name: Publish Release
+    needs: [build-windows, build-macos, build-linux, build-android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
+          draft: false
+          generate_release_notes: true

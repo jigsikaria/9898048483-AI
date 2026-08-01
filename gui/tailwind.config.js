@@ -16,6 +16,10 @@ export default {
           neon: '#22d3ee',
           violet: '#a855f7',
         },
+        gold: {
+          DEFAULT: '#f5c542',
+          dim: '#d4a017',
+        },
       },
       boxShadow: {
         neon: '0 0 12px rgba(0, 255, 156, 0.45), 0 0 32px rgba(0, 255, 156, 0.15)',
