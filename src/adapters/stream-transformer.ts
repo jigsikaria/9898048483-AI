@@ -21,6 +21,8 @@ export interface OpenAIChatChunk {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
+export type StreamUsage = { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -90,6 +92,7 @@ export function transformStream(
   model: string,
   requestId: string,
   onError?: (err: unknown) => void,
+  onUsage?: (usage: StreamUsage) => void,
 ): ReadableStream<Uint8Array> {
   const lineGen = parseSseLines(source);
   let started = false;
@@ -97,13 +100,13 @@ export function transformStream(
   let chunkGen: AsyncGenerator<Uint8Array>;
   switch (provider) {
     case 'anthropic':
-      chunkGen = anthropicToOpenAI(lineGen, model, requestId);
+      chunkGen = anthropicToOpenAI(lineGen, model, requestId, onUsage);
       break;
     case 'gemini':
-      chunkGen = geminiToOpenAI(lineGen, model, requestId);
+      chunkGen = geminiToOpenAI(lineGen, model, requestId, onUsage);
       break;
     default:
-      chunkGen = passthroughToOpenAI(lineGen, model, requestId);
+      chunkGen = passthroughToOpenAI(lineGen, model, requestId, onUsage);
   }
 
   return new ReadableStream<Uint8Array>({
@@ -141,6 +144,7 @@ async function* passthroughToOpenAI(
   source: AsyncGenerator<unknown>,
   model: string,
   requestId: string,
+  onUsage?: (usage: StreamUsage) => void,
 ): AsyncGenerator<Uint8Array> {
   for await (const raw of source) {
     const chunk = raw as Partial<OpenAIChatChunk>;
@@ -160,7 +164,9 @@ async function* passthroughToOpenAI(
       yield sseEncode(makeChunk(requestId, model, {}, finish));
     }
     if (chunk.usage) {
-      yield sseEncode(makeChunk(requestId, model, {}, null, chunk.usage as OpenAIChatChunk['usage']));
+      const usage = chunk.usage as OpenAIChatChunk['usage'];
+      if (usage) onUsage?.(usage);
+      yield sseEncode(makeChunk(requestId, model, {}, null, usage));
     }
   }
 }
@@ -173,6 +179,7 @@ async function* anthropicToOpenAI(
   source: AsyncGenerator<unknown>,
   model: string,
   requestId: string,
+  onUsage?: (usage: StreamUsage) => void,
 ): AsyncGenerator<Uint8Array> {
   let finished = false;
   let inputTokens = 0;
@@ -222,11 +229,13 @@ async function* anthropicToOpenAI(
   }
 
   if (inputTokens > 0 || outputTokens > 0) {
-    yield sseEncode(makeChunk(requestId, model, {}, null, {
+    const usage: StreamUsage = {
       prompt_tokens: inputTokens,
       completion_tokens: outputTokens,
       total_tokens: inputTokens + outputTokens,
-    }));
+    };
+    onUsage?.(usage);
+    yield sseEncode(makeChunk(requestId, model, {}, null, usage));
   }
 }
 
@@ -238,6 +247,7 @@ async function* geminiToOpenAI(
   source: AsyncGenerator<unknown>,
   model: string,
   requestId: string,
+  onUsage?: (usage: StreamUsage) => void,
 ): AsyncGenerator<Uint8Array> {
   let roleSent = false;
   let finished = false;
@@ -280,11 +290,13 @@ async function* geminiToOpenAI(
     yield sseEncode(makeChunk(requestId, model, {}, 'stop'));
   }
   if (inputTokens > 0 || outputTokens > 0) {
-    yield sseEncode(makeChunk(requestId, model, {}, null, {
+    const usage: StreamUsage = {
       prompt_tokens: inputTokens,
       completion_tokens: outputTokens,
       total_tokens: inputTokens + outputTokens,
-    }));
+    };
+    onUsage?.(usage);
+    yield sseEncode(makeChunk(requestId, model, {}, null, usage));
   }
 }
 

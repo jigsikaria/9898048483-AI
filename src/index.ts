@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { config, allModels, detectProvider, providers } from './config.ts';
+import { log } from './logger.ts';
 import { MultiKeyRotator } from './middleware/key-rotator.ts';
 import { FallbackRouter } from './middleware/fallback-router.ts';
 import { transformStream } from './adapters/stream-transformer.ts';
@@ -17,6 +19,49 @@ let totalRequests = 0;
 let totalTokens = 0;
 let fallbackEvents = 0;
 
+/**
+ * Best-effort client IP. When `TRUST_PROXY` is set the proxy-provided headers
+ * are trusted; otherwise the socket IP injected by the server wrapper (see the
+ * bootstrap below) takes precedence, so a client cannot spoof its way past the
+ * allowlist or rate limiter.
+ */
+function clientIp(c: Context): string {
+  const forwarded = (c.req.header('x-forwarded-for') ?? '').split(',')[0]?.trim() || undefined;
+  const realIp = c.req.header('x-real-ip')?.trim() || undefined;
+  if (config.trustProxy) return forwarded ?? realIp ?? 'unknown';
+  return realIp ?? forwarded ?? 'unknown';
+}
+
+function isValidHttpUrl(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** Resolves the effective base URL for a provider, honouring a per-request override. */
+function resolveBaseUrl(provider: ProviderName, customEndpoint?: string): string {
+  const override = config.allowCustomEndpoint && isValidHttpUrl(customEndpoint) ? customEndpoint : undefined;
+  if (customEndpoint && !override) {
+    log('warn', `ignoring invalid or disabled x-custom-endpoint: ${customEndpoint}`);
+  }
+  return (override ?? providers[provider].baseUrl).replace(/\/$/, '');
+}
+
+/** Extracts a user-supplied provider key from the request, if any. */
+function userKeyFromRequest(c: Context): string | undefined {
+  const authHeader = c.req.header('authorization') ?? c.req.header('x-api-key');
+  if (!authHeader) return undefined;
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!token || token === config.gatewayApiKey) return undefined;
+  // `sk-env` is a sentinel meaning "use the server-configured env keys".
+  if (token.startsWith('sk-env')) return undefined;
+  return token;
+}
+
 // ------------------------------------------------------------
 // Middleware: CORS (works for VS Code, Android Studio, Cursor, mobile)
 // ------------------------------------------------------------
@@ -32,7 +77,7 @@ app.use('*', cors({
 // Middleware: IP allowlist + gateway key verification + rate limit
 // ------------------------------------------------------------
 app.use('*', async (c, next) => {
-  const ip = (c.req.header('x-forwarded-for')?.split(',')[0] ?? c.req.header('x-real-ip') ?? 'unknown').trim();
+  const ip = clientIp(c);
 
   if (config.ipAllowlist.length > 0 && !config.ipAllowlist.includes(ip)) {
     return c.json({ error: { message: 'Forbidden: IP not in allowlist', type: 'ip_denied' } }, 403);
@@ -79,6 +124,12 @@ function pickBody(body: Record<string, unknown>): ChatCompletionRequest {
     stream: Boolean(body.stream),
     ...(body.top_p !== undefined ? { top_p: body.top_p as number } : {}),
     ...(body.stop !== undefined ? { stop: body.stop as string | string[] } : {}),
+    ...(body.max_output_tokens !== undefined ? { max_output_tokens: body.max_output_tokens as number } : {}),
+    ...(body.frequency_penalty !== undefined ? { frequency_penalty: body.frequency_penalty as number } : {}),
+    ...(body.presence_penalty !== undefined ? { presence_penalty: body.presence_penalty as number } : {}),
+    ...(body.n !== undefined ? { n: body.n as number } : {}),
+    ...(body.tools !== undefined ? { tools: body.tools as unknown[] } : {}),
+    ...(body.tool_choice !== undefined ? { tool_choice: body.tool_choice as unknown } : {}),
   };
 }
 
@@ -183,13 +234,8 @@ app.post('/v1/embeddings', async (c) => {
     );
   }
 
-  if (customEndpoint && providers[primary]) {
-    providers[primary].baseUrl = customEndpoint;
-  }
-
-  const providerConfig = providers[primary];
-  const baseUrl = providerConfig.baseUrl.replace(/\/$/, '');
-  const key = rotator.next(primary);
+  const baseUrl = resolveBaseUrl(primary, customEndpoint);
+  const key = userKeyFromRequest(c) ?? rotator.next(primary);
   const endpoint = `${baseUrl}/embeddings`;
 
   const headers = new Headers({ 'content-type': 'application/json' });
@@ -227,7 +273,6 @@ app.post('/v1/chat/completions', async (c) => {
     return c.json({ error: { message: 'Invalid JSON body', type: 'invalid_request' } }, 400);
   }
 
-  const authHeader = c.req.header('authorization') ?? c.req.header('x-api-key');
   const overrideProvider = c.req.header('x-provider');
   const customEndpoint = c.req.header('x-custom-endpoint');
   const fallbackHeader = c.req.header('x-fallback');
@@ -240,25 +285,28 @@ app.post('/v1/chat/completions', async (c) => {
     return c.json({ error: { message: 'messages is required', type: 'invalid_request' } }, 400);
   }
 
-  // Allow a per-request override of the provider base URL (e.g. LAN Ollama).
-  if (customEndpoint && providers[primary]) {
-    providers[primary].baseUrl = customEndpoint;
+  // Per-request provider base URL override (e.g. LAN Ollama). Scoped to this
+  // request only — it never mutates the shared provider registry.
+  const baseUrlOverrides =
+    customEndpoint && isValidHttpUrl(customEndpoint) && config.allowCustomEndpoint
+      ? { [primary]: customEndpoint }
+      : undefined;
+  if (customEndpoint && !baseUrlOverrides) {
+    log('warn', `ignoring invalid or disabled x-custom-endpoint: ${customEndpoint}`);
   }
 
-  // Inject per-request key into the rotator pool (single-use, volatile).
-  if (authHeader && !authHeader.replace(/^Bearer\s+/i, '').startsWith('sk-env')) {
-    const userKey = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (userKey && userKey !== config.gatewayApiKey) {
-      rotator.inject?.(primary, userKey);
-    }
-  }
+  // Per-request key override (e.g. from the GUI Key Vault). Scoped to this
+  // request only — it is never added to the shared rotation pool.
+  const userKey = userKeyFromRequest(c);
+  const keyOverrides = userKey ? { [primary]: userKey } : undefined;
 
   // Friendly 502 when the user selected a cloud provider but no API key is
-  // configured anywhere in the chain (env, vault or per-request injection).
+  // configured anywhere in the chain (env, vault or per-request override).
   // Only an explicitly-requested local provider (ollama/vllm) bypasses this.
   const canServe =
     primary === 'ollama' ||
     primary === 'vllm' ||
+    Boolean(userKey) ||
     chain.some((p) => p !== 'ollama' && p !== 'vllm' && rotator.hasKeys(p));
   if (!canServe) {
     return c.json(
@@ -274,13 +322,25 @@ app.post('/v1/chat/completions', async (c) => {
   }
 
   try {
-    const { provider, response, attempt } = await router.tryChain(chain, chatBody, c.req.raw.headers);
+    const { provider, response, attempt } = await router.tryChain(
+      chain,
+      chatBody,
+      c.req.raw.headers,
+      undefined,
+      { baseUrlOverrides, keyOverrides },
+    );
     if (attempt > 1) fallbackEvents += 1;
 
     if (!response.ok) {
       const errorBody = await response.text();
       logRequest({ method: 'POST', path: '/v1/chat/completions', model: chatBody.model, provider, status: response.status, latencyMs: Date.now() - startedAt, streamed: false, attempt });
-      return c.json(JSON.parse(errorBody || '{}'), response.status as 400);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(errorBody || '{}');
+      } catch {
+        parsed = { error: { message: errorBody || 'Upstream error', type: 'upstream_error' } };
+      }
+      return c.json(parsed, response.status as 400);
     }
 
     const contentType = response.headers.get('content-type') ?? '';
@@ -294,7 +354,10 @@ app.post('/v1/chat/completions', async (c) => {
           provider,
           chatBody.model,
           requestId,
-          (err) => console.error(`[adapter-os] stream error (${provider}):`, err),
+          (err) => log('error', `stream error (${provider}):`, err),
+          (usage) => {
+            totalTokens += usage.total_tokens;
+          },
         );
         logRequest({ method: 'POST', path: '/v1/chat/completions', model: chatBody.model, provider, status: 200, latencyMs: Date.now() - startedAt, streamed: true, attempt });
         return new Response(transformed, {
@@ -345,9 +408,7 @@ function toOpenAICompletion(
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: requestedModel,
-  } as const;
-
-  switch (provider) {
+  } as const;  switch (provider) {
     case 'anthropic': {
       const content = (data.content as Array<{ type?: string; text?: string }> | undefined)
         ?.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
@@ -391,13 +452,22 @@ function toOpenAICompletion(
     }
     default: {
       // OpenAI-compatible passthrough (OpenAI, DeepSeek, Groq, OpenRouter, Mistral, Cohere, vLLM).
-      return data as unknown as OpenAICompletion;
+      // Normalize the envelope so a non-conforming 200 body still yields a valid
+      // chat.completion shape instead of being cast through unvalidated.
+      const passthrough = data as Partial<OpenAICompletion>;
+      return {
+        ...base,
+        id: typeof passthrough.id === 'string' ? passthrough.id : base.id,
+        model: requestedModel,
+        choices: Array.isArray(passthrough.choices) ? passthrough.choices : [],
+        usage: passthrough.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      };
     }
   }
 }
 
 export default app;
-export { rotator, router, requestLog };
+export { rotator, router, requestLog, toOpenAICompletion };
 
 // ------------------------------------------------------------
 // Server bootstrap - runs on `bun run src/index.ts` (Bun) or
@@ -409,19 +479,39 @@ const isEntry =
 
 if (isEntry) {
   const listen = async () => {
+    // When not behind a trusted proxy, tag each request with the real socket
+    // IP so the allowlist / rate limiter cannot be bypassed with a spoofed
+    // X-Forwarded-For header.
+    const withSocketIp = async (request: Request, socketIp: string | null | undefined): Promise<Response> => {
+      if (config.trustProxy || !socketIp) return app.fetch(request);
+      const headers = new Headers(request.headers);
+      headers.set('x-real-ip', socketIp);
+      return app.fetch(new Request(request, { headers }));
+    };
+
     if (typeof Bun !== 'undefined') {
       // Bun native serve adapter
       Bun.serve({
         port: config.port,
         hostname: config.host,
-        fetch: app.fetch,
+        fetch: (request, server) => {
+          const ip = server?.requestIP?.(request)?.address;
+          return withSocketIp(request, ip);
+        },
       });
     } else {
       const { serve } = await import('@hono/node-server');
-      serve({ port: config.port, hostname: config.host, fetch: app.fetch });
+      serve({
+        port: config.port,
+        hostname: config.host,
+        fetch: (request, env) => {
+          const incoming = (env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming;
+          return withSocketIp(request, incoming?.socket?.remoteAddress);
+        },
+      });
     }
-    console.log(`[adapter-os] Universal AI Gateway v10.0 listening on http://${config.host}:${config.port}`);
-    console.log(`[adapter-os] Endpoints: GET /v1/models | POST /v1/chat/completions | GET /health | GET /metrics`);
+    log('info', `Universal AI Gateway v10.0 listening on http://${config.host}:${config.port}`);
+    log('info', `Endpoints: GET /v1/models | POST /v1/chat/completions | GET /health | GET /metrics`);
   };
   void listen();
 }

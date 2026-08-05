@@ -21,6 +21,18 @@ export const config = {
   gatewayApiKey: str('GATEWAY_API_KEY', 'adapter-os-local'),
   requiredGatewayKey: bool('REQUIRE_GATEWAY_KEY', false),
   allowedOrigins: str('ALLOWED_ORIGINS', '*'),
+  // Trust X-Forwarded-For / X-Real-IP headers. Set to true only when the
+  // gateway is behind a reverse proxy (nginx, Vercel, Cloudflare). When false,
+  // the gateway uses the socket IP of the direct connection instead, so a
+  // client cannot spoof its IP to bypass the allowlist or rate limiter.
+  trustProxy: bool('TRUST_PROXY', false),
+  // Allow clients to point a request at a custom provider base URL via the
+  // x-custom-endpoint header. Per-request only; never mutates global config.
+  allowCustomEndpoint: bool('ALLOW_CUSTOM_ENDPOINT', true),
+  // Timeout (ms) for establishing an upstream provider connection. A provider
+  // that does not respond within this window is treated as failed and the
+  // request falls through to the next provider in the chain.
+  upstreamTimeoutMs: int('UPSTREAM_TIMEOUT_MS', 60_000),
   ipAllowlist: str('IP_ALLOWLIST', '')
     .split(',')
     .map((s) => s.trim())
@@ -32,10 +44,12 @@ export const config = {
   },
   logLevel: str('LOG_LEVEL', 'info'),
   prometheusEnabled: bool('PROMETHEUS_ENABLED', true),
-  fallbackChain: str('FALLBACK_CHAIN', 'anthropic,gemini,deepseek,openrouter,ollama')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean) as ProviderName[],
+  fallbackChain: [...new Set(
+    str('FALLBACK_CHAIN', 'anthropic,gemini,deepseek,openrouter,ollama')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  )] as ProviderName[],
 };
 
 export const keyFromEnv = (provider: ProviderName): string[] => {

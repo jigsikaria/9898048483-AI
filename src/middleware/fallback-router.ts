@@ -1,6 +1,13 @@
-import { providers } from '../config.ts';
+import { config, providers } from '../config.ts';
 import { MultiKeyRotator } from './key-rotator.ts';
 import type { ChatCompletionRequest, ProviderName } from '../types.ts';
+
+export interface TryChainOptions {
+  /** Per-provider base URL overrides, applied only for this chain attempt. */
+  baseUrlOverrides?: Partial<Record<ProviderName, string>>;
+  /** Per-provider key overrides (e.g. a user-supplied Bearer token), scoped to this request. */
+  keyOverrides?: Partial<Record<ProviderName, string>>;
+}
 
 export interface UpstreamResponse {
   provider: ProviderName;
@@ -78,19 +85,21 @@ export class FallbackRouter {
     request: ChatCompletionRequest,
     headers: Headers,
     key: string | null,
+    baseUrlOverride?: string,
   ): Promise<Request> {
     const providerConfig = providers[provider];
-    const baseUrl = providerConfig.baseUrl.replace(/\/$/, '');
+    const baseUrl = (baseUrlOverride ?? providerConfig.baseUrl).replace(/\/$/, '');
     const url = this.rewriteUrl(provider, baseUrl);
     const upstreamHeaders = this.buildHeaders(provider, key ?? '', headers);
 
     let body: unknown = request;
     let finalUrl = url;
 
-    // Gemini uses path-embedded keys and a native message format.
+    // Gemini uses a path-embedded model and the key travels in the header
+    // (set by buildHeaders) so it never leaks into URLs or access logs.
     if (provider === 'gemini') {
-      const modelId = request.model.replace(/^gemini-/, 'gemini-');
-      finalUrl = `${baseUrl}/models/${modelId}:streamGenerateContent?alt=sse${key ? `&key=${encodeURIComponent(key ?? '')}` : ''}`;
+      const modelId = request.model;
+      finalUrl = `${baseUrl}/models/${modelId}:streamGenerateContent?alt=sse`;
       const contents = request.messages
         .filter((m) => m.role !== 'system')
         .map((m) => ({
@@ -159,6 +168,7 @@ export class FallbackRouter {
     request: ChatCompletionRequest,
     headers: Headers,
     predicate: FallbackPredicate = FallbackRouter.defaultPredicate,
+    options: TryChainOptions = {},
   ): Promise<FallbackChainResult> {
     let lastError: { status: number; body: string } | null = null;
     let missingKey = false;
@@ -171,24 +181,37 @@ export class FallbackRouter {
       }
 
       const requiresKey = provider !== 'ollama' && provider !== 'vllm';
-      const key = this.rotator.next(provider);
+      const key = options.keyOverrides?.[provider] ?? this.rotator.next(provider);
       if (requiresKey && !key) {
         missingKey = true;
         attempt += 1;
         continue;
       }
 
-      const upstream = await this.buildUpstreamRequest(provider, request, headers, key);
+      const upstream = await this.buildUpstreamRequest(
+        provider,
+        request,
+        headers,
+        key,
+        options.baseUrlOverrides?.[provider],
+      );
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), config.upstreamTimeoutMs);
+
       let response: Response;
       try {
-        response = await fetch(upstream);
+        response = await fetch(upstream, { signal: controller.signal });
       } catch (err) {
+        clearTimeout(timeout);
         const message = err instanceof Error ? err.message : String(err);
-        lastError = { status: 502, body: JSON.stringify({ error: { message, type: 'network_error' } }) };
-        this.rotator.record(provider, key ?? '', 502);
+        const status = controller.signal.aborted ? 504 : 502;
+        lastError = { status, body: JSON.stringify({ error: { message, type: 'network_error' } }) };
+        this.rotator.record(provider, key ?? '', status);
         attempt += 1;
         continue;
       }
+      clearTimeout(timeout);
 
       this.rotator.record(provider, key ?? '', response.status);
 

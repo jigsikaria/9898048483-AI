@@ -96,19 +96,22 @@ DEEPSEEK_API_KEY=...
 
 1. **Model name** auto-detects the provider (`claude-*` → Anthropic, `gemini-*` → Gemini, etc.)
 2. **`x-provider` header** overrides detection (`x-provider: ollama`)
-3. **`x-custom-endpoint` header** overrides the provider base URL (point it at a LAN Ollama/vLLM)
+3. **`x-custom-endpoint` header** overrides the provider base URL per-request only (point it at a LAN Ollama/vLLM). The override is never persisted on the shared provider registry, so concurrent requests can't clobber each other. Disable it on public gateways with `ALLOW_CUSTOM_ENDPOINT=false`.
 4. **`x-fallback` header** sets the per-request fallback chain (`x-fallback: anthropic,gemini,openrouter`)
 
 ### Request-time key injection
 
 Send `Authorization: Bearer <key>` or `x-api-key: <key>` on any request to use that key for the
 session instead of the server-configured key — ideal for per-user billing on a shared gateway.
+The key is scoped to that single request and is never added to the shared rotation pool, so one
+client's key can't be reused by another.
 
 ## Fallback Engine
 
 When a provider returns 4xx/5xx, times out, or rate-limits, the gateway automatically retries the
-chain `FALLBACK_CHAIN` (default `anthropic,gemini,deepseek,openrouter,ollama`). Failed providers are
-quarantined for 30s and skipped. Watch it live:
+chain `FALLBACK_CHAIN` (default `anthropic,gemini,deepseek,openrouter,ollama`). A provider that does
+not respond within `UPSTREAM_TIMEOUT_MS` (default 60s) is treated as failed and skipped. Failed
+providers are quarantined for 30s and skipped. Watch it live:
 
 ```bash
 curl http://localhost:8787/metrics   # adapter_fallback_events_total
@@ -295,9 +298,16 @@ Health, Prometheus counters, and the last 50 gateway requests.
 ## Security Notes
 
 - Set `REQUIRE_GATEWAY_KEY=true` and a strong `GATEWAY_API_KEY` before exposing publicly.
-- Use `IP_ALLOWLIST` for private deployments.
+- Use `IP_ALLOWLIST` for private deployments. By default (`TRUST_PROXY=false`) the gateway keys the
+  allowlist and rate limiter off the **socket IP** of the direct connection, so a client cannot
+  spoof `X-Forwarded-For` / `X-Real-IP` to bypass either. Only set `TRUST_PROXY=true` when running
+  behind a trusted reverse proxy (nginx, Vercel, Cloudflare, Render).
 - Provider keys live in the server `.env` (or the GUI Key Vault, encrypted at rest in the browser).
 - Key Vault uses AES-256-GCM with a PBKDF2-derived key; the passphrase never leaves the device.
+- Per-request keys (`Authorization: Bearer`) and `x-custom-endpoint` overrides are scoped to the
+  single request — they are never stored in the shared key pool or provider registry. On public
+  gateways consider `ALLOW_CUSTOM_ENDPOINT=false` to prevent pointing upstream requests at
+  arbitrary URLs.
 
 ## License
 

@@ -104,13 +104,6 @@ export class MultiKeyRotator {
     this.record(provider, key, 200);
   }
 
-  /** Adds a volatile per-request key to the pool (e.g. user-supplied Bearer token). */
-  inject(provider: ProviderName, key: string): void {
-    const pool = this.providerKeys(provider);
-    if (pool.some((k) => k.value === key)) return;
-    pool.unshift({ value: key, failures: 0, healthy: true, cooldownUntil: 0 });
-  }
-
   status(): KeyStatus[] {
     const result: KeyStatus[] = [];
     for (const [provider, pool] of this.keys.entries()) {

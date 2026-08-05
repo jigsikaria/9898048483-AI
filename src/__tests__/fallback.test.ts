@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { config } from '../config.ts';
 import { FallbackRouter } from '../middleware/fallback-router.ts';
 import { MultiKeyRotator } from '../middleware/key-rotator.ts';
 import type { ChatCompletionRequest } from '../types.ts';
@@ -23,6 +24,7 @@ function requestFor(model: string, messages?: ChatCompletionRequest['messages'])
 afterEach(() => {
   vi.unstubAllGlobals();
   capturedRequests = [];
+  config.upstreamTimeoutMs = 60_000;
 });
 
 describe('FallbackRouter', () => {
@@ -127,6 +129,60 @@ describe('FallbackRouter', () => {
     expect(body.error.message).toContain('API Key missing for provider');
     expect(mock).not.toHaveBeenCalled();
   });
+
+  it('falls through to the next provider when an upstream times out', async () => {
+    process.env.ANTHROPIC_API_KEY = 'a-key';
+    process.env.GEMINI_API_KEY = 'g-key';
+    config.upstreamTimeoutMs = 50;
+    const rotator = new MultiKeyRotator();
+    const router = new FallbackRouter(rotator);
+
+    // Simulates a provider that never responds: the fetch only rejects once
+    // the router's AbortController fires the timeout.
+    const mock = vi.fn(
+      (_req: Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () =>
+            reject(new DOMException('The operation was aborted due to timeout', 'AbortError')),
+          );
+        }),
+    );
+    vi.stubGlobal('fetch', mock);
+
+    const result = await router.tryChain(
+      ['anthropic', 'gemini'],
+      requestFor('claude-3-5-sonnet-20241022'),
+      new Headers(),
+    );
+
+    expect(mock).toHaveBeenCalledTimes(2);
+    expect(result.response.status).toBe(504);
+    const body = await result.response.json().catch(() => ({}));
+    expect(body.error.type).toBe('fallback_chain_exhausted');
+  });
+
+  it('honours a per-request key override and does not add it to the shared pool', async () => {
+    process.env.OPENAI_API_KEY = 'env-key';
+    const rotator = new MultiKeyRotator();
+    const router = new FallbackRouter(rotator);
+
+    const auths: (string | null)[] = [];
+    const mock = vi.fn(async (req: Request) => {
+      auths.push(req.headers.get('authorization'));
+      return okJson({ id: 'ok', object: 'chat.completion' });
+    });
+    vi.stubGlobal('fetch', mock);
+
+    const req = requestFor('gpt-4o');
+    await router.tryChain(['openai'], req, new Headers(), undefined, {
+      keyOverrides: { openai: 'user-key-1' },
+    });
+    await router.tryChain(['openai'], req, new Headers());
+
+    expect(auths[0]).toBe('Bearer user-key-1');
+    expect(auths[1]).toBe('Bearer env-key');
+    expect(rotator.next('openai')).toBe('env-key');
+  });
 });
 
 describe('Protocol request building', () => {
@@ -160,14 +216,15 @@ describe('Protocol request building', () => {
     expect(body.max_tokens).toBe(4096);
   });
 
-  it('builds a Gemini request with model-content mapping and path-embedded key', async () => {
+  it('builds a Gemini request with model-content mapping and key in header (not URL)', async () => {
     const rotator = new MultiKeyRotator();
     const router = new FallbackRouter(rotator);
     await router.tryChain(['gemini'], requestFor('gemini-1.5-pro-latest'), new Headers());
 
     const req = capturedRequests[0] as Request;
     expect(req.url).toContain('streamGenerateContent?alt=sse');
-    expect(req.url).toContain('key=g-key');
+    expect(req.url).not.toContain('key=');
+    expect(req.headers.get('x-goog-api-key')).toBe('g-key');
 
     const body = await req.json() as Record<string, unknown>;
     expect(body.contents).toEqual([
